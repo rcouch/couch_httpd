@@ -125,7 +125,8 @@ send_docs_multipart(Resp, DocId, Results, OuterBoundary, Options0) ->
                 Body = {[{<<"id">>, DocId},
                          {<<"error">>, <<"not_found">>},
                          {<<"reason">>, <<"missing">>},
-                         {<<"status">>, 400}]},
+                         {<<"status">>, 400},
+                         {<<"missing">>, RevStr}]},
                 Json = ?JSON_ENCODE(Body),
                 {ContentType, _Len} = couch_doc:len_doc_to_multi_part_stream(
                         InnerBoundary, Json, [], true),
