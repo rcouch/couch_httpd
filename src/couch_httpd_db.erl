@@ -652,7 +652,7 @@ send_docs_multipart(Req, Results, Options1) ->
              couch_httpd:send_chunk(Resp, <<"\r\n--", OuterBoundary/binary>>);
         ({{not_found, missing}, RevId}) ->
              RevStr = couch_doc:rev_to_str(RevId),
-             Json = ?JSON_ENCODE({[{"missing", RevStr}]}),
+             Json = ?JSON_ENCODE({[{<<"missing">>, RevStr}]}),
              couch_httpd:send_chunk(Resp,
                 [<<"\r\nContent-Type: application/json; error=\"true\"\r\n\r\n">>,
                 Json,
