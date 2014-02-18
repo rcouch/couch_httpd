@@ -59,14 +59,16 @@ handle_req(#httpd{method='POST',path_parts=[_,<<"_bulk_get">>],
                              ?b2l(Boundary1) ++  "\""},
                     {ok, Resp1} = couch_httpd:start_chunked_response(Req, 200,
                                                                      [CType]),
+                    couch_httpd:send_chunk(Resp1, <<"--", Boundary1/binary>>),
                     {Resp1, Boundary1}
             end,
 
             lists:foldr(fun({Props}, Acc) ->
                         DocId = couch_util:get_value(<<"id">>, Props),
-                        Revs = [?b2l(couch_util:get_value(<<"rev">>,
-                                                          Props, ""))],
-                        Revs1 = couch_doc:parse_revs(Revs),
+                        Revs = case couch_util:get_value(<<"rev">>, Props) of
+                            undefined -> [];
+                            Rev -> couch_doc:parse_revs([?b2l(Rev)])
+                        end,
                         Options1 = case couch_util:get_value(<<"atts_since">>,
                                                              Props, []) of
                             [] ->
@@ -76,7 +78,7 @@ handle_req(#httpd{method='POST',path_parts=[_,<<"_bulk_get">>],
                                 [{atts_since, RevList1}, attachments |Options]
                         end,
                         {ok, Results} = couch_db:open_doc_revs(Db, DocId,
-                                                               Revs1, Options),
+                                                               Revs, Options),
                         case Boundary of
                             nil ->
                                 send_docs(Resp, DocId, Results,
@@ -122,18 +124,18 @@ send_docs(Resp, DocId, Results, Options, Sep) ->
 send_docs_multipart(Resp, DocId, Results, OuterBoundary, Options0) ->
     Options = [attachments, follows, att_encoding_info | Options0],
     InnerBoundary = couch_uuids:random(),
-    couch_httpd:send_chunk(Resp, <<"--", OuterBoundary/binary>>),
+
     lists:foreach(
         fun({ok, #doc{atts=Atts}=Doc}) ->
                 JsonBytes = ?JSON_ENCODE(couch_doc:to_json_obj(Doc, Options)),
                 {ContentType, _Len} = couch_doc:len_doc_to_multi_part_stream(
-                        InnerBoundary, JsonBytes, Atts, true),
+                        InnerBoundary, JsonBytes, Atts, true, true),
                 Hdr = <<"\r\nContent-Type: ", ContentType/binary, "\r\n\r\n">>,
                 couch_httpd:send_chunk(Resp, Hdr),
                 couch_doc:doc_to_multi_part_stream(InnerBoundary, JsonBytes,
                                                    Atts, fun(Data) ->
                             couch_httpd:send_chunk(Resp, Data)
-                    end, true),
+                    end, true, true),
                 couch_httpd:send_chunk(Resp, <<"\r\n--", OuterBoundary/binary>>);
             ({{not_found, missing}, RevId}) ->
                 RevStr = couch_doc:rev_to_str(RevId),
