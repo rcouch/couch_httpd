@@ -33,14 +33,29 @@ handle_req(#httpd{method='POST',path_parts=[_,<<"_bulk_get">>],
             } = couch_httpd_db:parse_doc_query(Req),
 
             %% start the response
-            {Resp, Boundary} = case MochiReq:accepts_content_type("multipart/mixed") of
+            AcceptMixedMp = MochiReq:accepts_content_type("multipart/mixed"),
+            AcceptRelatedMp = MochiReq:accepts_content_type("multipart/related"),
+
+            %% do we accept multipart
+            AcceptMp = AcceptMixedMp orelse AcceptRelatedMp,
+
+            {Resp, Boundary} = case AcceptMp of
                 false ->
                     {ok, Resp1} = couch_httpd:start_json_response(Req, 200),
                     couch_httpd:send_chunk(Resp1, "["),
                     {Resp1, nil};
                 true ->
                     Boundary1 = couch_uuids:random(),
-                    CType = {"Content-Type", "multipart/mixed; boundary=\"" ++
+
+                    %% some versions of couchbase-lite only accept
+                    %% multipart/related at top level.
+                    %% https://github.com/couchbase/couchbase-lite-ios/issues/255
+                    MpType = case AcceptMixedMp of
+                        true -> "multipart/mixed";
+                        _ ->  "multipart/related"
+                    end,
+
+                    CType = {"Content-Type", MpType ++ "; boundary=\"" ++
                              ?b2l(Boundary1) ++  "\""},
                     {ok, Resp1} = couch_httpd:start_chunked_response(Req, 200,
                                                                      [CType]),
