@@ -62,7 +62,7 @@ handle_req(#httpd{method='POST',path_parts=[_,<<"_bulk_get">>],
                     {Resp1, Boundary1}
             end,
 
-            lists:foldr(fun({Props}, Acc) ->
+            {_, Total} = lists:foldr(fun({Props}, {Sep, Count}) ->
                         DocId = couch_util:get_value(<<"id">>, Props),
                         Revs = case couch_util:get_value(<<"rev">>, Props) of
                             undefined -> all;
@@ -84,7 +84,7 @@ handle_req(#httpd{method='POST',path_parts=[_,<<"_bulk_get">>],
                         case Boundary of
                             nil when Results /= [] ->
                                 send_docs(Resp, DocId, Results,
-                                          Options1, Acc);
+                                          Options1, Sep);
                             nil ->
                                 ok;
                             _  when Results /= [] ->
@@ -94,8 +94,8 @@ handle_req(#httpd{method='POST',path_parts=[_,<<"_bulk_get">>],
                             _ ->
                                 ok
                         end,
-                        ","
-                end, "", DocsArray),
+                        {",", Count + length(Results)}
+                end, {"", 0}, DocsArray),
 
 
             %% finish the response
@@ -103,6 +103,9 @@ handle_req(#httpd{method='POST',path_parts=[_,<<"_bulk_get">>],
                 nil ->
                     couch_httpd:send_chunk(Resp1, <<"]}">>),
                     couch_httpd:end_json_response(Resp);
+                _ when Total =:= 0 ->
+                    %% nothing has been sent, return an empty body,
+                    couch_httpd:last_chunk(Resp);
                 _ ->
                     couch_httpd:send_chunk(Resp, <<"--">>),
                     couch_httpd:last_chunk(Resp)
