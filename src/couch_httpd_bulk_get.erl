@@ -42,7 +42,7 @@ handle_req(#httpd{method='POST',path_parts=[_,<<"_bulk_get">>],
             {Resp, Boundary} = case AcceptMp of
                 false ->
                     {ok, Resp1} = couch_httpd:start_json_response(Req, 200),
-                    couch_httpd:send_chunk(Resp1, "["),
+                    couch_httpd:send_chunk(Resp1, "{\"results\": ["),
                     {Resp1, nil};
                 true ->
                     Boundary1 = couch_uuids:random(),
@@ -59,14 +59,13 @@ handle_req(#httpd{method='POST',path_parts=[_,<<"_bulk_get">>],
                              ?b2l(Boundary1) ++  "\""},
                     {ok, Resp1} = couch_httpd:start_chunked_response(Req, 200,
                                                                      [CType]),
-                    couch_httpd:send_chunk(Resp1, <<"--", Boundary1/binary>>),
                     {Resp1, Boundary1}
             end,
 
             lists:foldr(fun({Props}, Acc) ->
                         DocId = couch_util:get_value(<<"id">>, Props),
                         Revs = case couch_util:get_value(<<"rev">>, Props) of
-                            undefined -> [];
+                            undefined -> all;
                             Rev -> couch_doc:parse_revs([?b2l(Rev)])
                         end,
                         Options1 = case couch_util:get_value(<<"atts_since">>,
@@ -77,22 +76,32 @@ handle_req(#httpd{method='POST',path_parts=[_,<<"_bulk_get">>],
                                 RevList1 = couch_doc:parse_revs(RevList),
                                 [{atts_since, RevList1}, attachments |Options]
                         end,
+
+                        %% get doc informations
                         {ok, Results} = couch_db:open_doc_revs(Db, DocId,
                                                                Revs, Options),
+
                         case Boundary of
-                            nil ->
+                            nil when Results /= [] ->
                                 send_docs(Resp, DocId, Results,
                                           Options1, Acc);
-                            _ ->
+                            nil ->
+                                ok;
+                            _  when Results /= [] ->
+                                couch_httpd:send_chunk(Resp, <<"--", Boundary/binary>>),
                                 send_docs_multipart(Resp, DocId, Results,
-                                                    Boundary, Options1)
+                                                    Boundary, Options1);
+                            _ ->
+                                ok
                         end,
                         ","
                 end, "", DocsArray),
 
+
             %% finish the response
             case Boundary of
                 nil ->
+                    couch_httpd:send_chunk(Resp1, <<"]}">>),
                     couch_httpd:end_json_response(Resp);
                 _ ->
                     couch_httpd:send_chunk(Resp, <<"--">>),
