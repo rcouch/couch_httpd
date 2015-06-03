@@ -168,27 +168,8 @@ handle_view_changes1(ChangesArgs, Req, Db, Queries, NoIndex, ViewOptions) ->
             end, [], lists:reverse(Queries))
     end,
 
-    {ok, Infos} = couch_mrview:get_info(Db, DDocId),
-    IsIndexed = lists:member(<<"seq_indexed">>,
-                             proplists:get_value(update_options, Infos,
-                                                 [])),
-
-    case {IsIndexed, NoIndex} of
-        {true, false} ->
-            handle_view_changes(Db, DDocId, VName, ViewOptions,
-                                QueriesOptions, ChangesArgs, Req);
-        {true, true} when ViewOptions /= [] orelse QueriesOptions /= undefined ->
-            ?LOG_ERROR("Tried to filter a non sequence indexed view~n",[]),
-            throw({bad_request, seqs_not_indexed});
-        {false, _} when ViewOptions /= [] orelse QueriesOptions /= undefined ->
-            ?LOG_ERROR("Tried to filter a non sequence indexed view~n",[]),
-            throw({bad_request, seqs_not_indexed});
-        {_, _} ->
-            %% old method we are getting changes using the btree instead
-            %% which is not efficient, log it
-            ?LOG_WARN("Filter without using a seq_indexed view.~n", []),
-            couch_changes:handle_changes(ChangesArgs, Req, Db)
-    end.
+    handle_view_changes(Db, DDocId, VName, ViewOptions, QueriesOptions,
+                        ChangesArgs, Req).
 
 
 
@@ -243,7 +224,7 @@ view_changes_cb(heartbeat, {_, _, _, Callback, Args}=Acc) ->
     {ok, Acc};
 view_changes_cb({{_Seq, _Key, _DocId}=Info, {Val, _Rev}=Raw}, Acc) ->
     view_changes_cb({Info, Val}, Acc);
-view_changes_cb({{Seq, _Key, DocId}, Val},
+view_changes_cb({{Seq, _Key, DocId}, Val}=KV,
                 {Prepend, OldLimit, Db0, Callback, Args}=Acc) ->
 
     %% is the key removed from the index?
@@ -254,13 +235,9 @@ view_changes_cb({{Seq, _Key, DocId}, Val},
 
     %% if the doc sequence is > to the one in the db record, reopen the
     %% database since it means we don't have the latest db value.
-    Db = case Db0#db.update_seq >= Seq of
-        true -> Db0;
-        false ->
-            {ok, Db1} = couch_db:reopen(Db0),
-            Db1
-    end,
+    {ok, Db} = couch_db:reopen(Db0),
 
+    couch_log:info("ici ~p~n", [KV]),
     case couch_db:get_doc_info(Db, DocId) of
         {ok, DocInfo} ->
             %% get change row
@@ -279,7 +256,10 @@ view_changes_cb({{Seq, _Key, DocId}, Val},
         {error, not_found} ->
             %% doc not found, continue
             {ok, Acc};
+        not_found ->
+            {ok, Acc};
         Error ->
+            couch_log:info("got an error ~p~n", [Error]),
             throw(Error)
     end.
 
