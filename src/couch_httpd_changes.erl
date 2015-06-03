@@ -259,7 +259,6 @@ view_changes_cb({{Seq, _Key, DocId}, Val}=KV,
         not_found ->
             {ok, Acc};
         Error ->
-            couch_log:info("got an error ~p~n", [Error]),
             throw(Error)
     end.
 
