@@ -237,11 +237,10 @@ view_changes_cb({{Seq, _Key, DocId}, Val}=KV,
     %% database since it means we don't have the latest db value.
     {ok, Db} = couch_db:reopen(Db0),
 
-    couch_log:info("ici ~p~n", [KV]),
     case couch_db:get_doc_info(Db, DocId) of
         {ok, DocInfo} ->
             %% get change row
-            ChangeRow = view_change_row(Db, DocInfo, Args, Removed),
+            ChangeRow = view_change_row(Db, Seq, DocInfo, Args, Removed),
 
             %% emit change row
             Callback({change, ChangeRow, Prepend}, ResponseType),
@@ -263,8 +262,8 @@ view_changes_cb({{Seq, _Key, DocId}, Val}=KV,
     end.
 
 
-view_change_row(Db, DocInfo, Args, Removed) ->
-    #doc_info{id = Id, high_seq = Seq, revs = Revs} = DocInfo,
+view_change_row(Db, Seq, DocInfo, Args, Removed) ->
+    #doc_info{id = Id, revs = Revs} = DocInfo,
     [#rev_info{rev=Rev, deleted=Del0} | _] = Revs,
 
     #changes_args{style=Style,
