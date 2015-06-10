@@ -12,7 +12,7 @@
 
 {application, couch_httpd, [
         {description, "CouchDB HTTP API"},
-        {vsn, "1.2.0"},
+        {vsn, "1.2.1"},
         {modules, []},
         {registered, [couch_httpd_sup]},
         {applications, [kernel,
@@ -22,7 +22,7 @@
                         public_key,
                         ssl,
                         inets]},
-        {included_applications, [mochiweb]},
+        {included_applications, [mochiweb, ibrowse, hackney]},
         {mod, {couch_httpd_app, []}},
         {env, []}
 ]}.
