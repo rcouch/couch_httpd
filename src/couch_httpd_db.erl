@@ -15,7 +15,7 @@
 -include("couch_httpd.hrl").
 
 -export([handle_request/1, handle_compact_req/2, handle_design_req/2,
-         db_req/2, couch_doc_open/4,handle_changes_req/2,
+         db_req/2, couch_doc_open/4,
          update_doc_result_to_json/1, update_doc_result_to_json/2,
          handle_design_info_req/3]).
 -export([parse_doc_query/1]).
@@ -47,106 +47,6 @@ handle_request(#httpd{path_parts=[DbName|RestParts],method=Method,
     {_, [SecondPart|_]} ->
         Handler = couch_util:dict_find(SecondPart, DbUrlHandlers, fun db_req/2),
         do_db_req(Req, Handler)
-    end.
-
-handle_changes_req(#httpd{method='POST'}=Req, Db) ->
-    couch_httpd:validate_ctype(Req, "application/json"),
-    handle_changes_req1(Req, Db);
-handle_changes_req(#httpd{method='GET'}=Req, Db) ->
-    handle_changes_req1(Req, Db);
-handle_changes_req(#httpd{path_parts=[_,<<"_changes">>]}=Req, _Db) ->
-    send_method_not_allowed(Req, "GET,HEAD,POST").
-
-handle_changes_req1(Req, #db{name=DbName}=Db) ->
-    AuthDbName = ?l2b(couch_config:get("couch_httpd_auth", "authentication_db")),
-    case AuthDbName of
-    DbName ->
-        % in the authentication database, _changes is admin-only.
-        ok = couch_db:check_is_admin(Db);
-    _Else ->
-        % on other databases, _changes is free for all.
-        ok
-    end,
-    handle_changes_req2(Req, Db).
-
-handle_changes_req2(Req, Db) ->
-    MakeCallback = fun(Resp) ->
-        fun({change, {ChangeProp}=Change, _}, "eventsource") ->
-            Seq = proplists:get_value(<<"seq">>, ChangeProp),
-            send_chunk(Resp, ["data: ", ?JSON_ENCODE(Change),
-                              "\n", "id: ", ?JSON_ENCODE(Seq),
-                              "\n\n"]);
-        ({change, Change, _}, "continuous") ->
-            send_chunk(Resp, [?JSON_ENCODE(Change) | "\n"]);
-        ({change, Change, Prepend}, _) ->
-            send_chunk(Resp, [Prepend, ?JSON_ENCODE(Change)]);
-        (start, "eventsource") ->
-            ok;
-        (start, "continuous") ->
-            ok;
-        (start, _) ->
-            send_chunk(Resp, "{\"results\":[\n");
-        ({stop, _EndSeq}, "eventsource") ->
-            end_json_response(Resp);
-        ({stop, EndSeq}, "continuous") ->
-            send_chunk(
-                Resp,
-                [?JSON_ENCODE({[{<<"last_seq">>, EndSeq}]}) | "\n"]
-            ),
-            end_json_response(Resp);
-        ({stop, EndSeq}, _) ->
-            send_chunk(
-                Resp,
-                io_lib:format("\n],\n\"last_seq\":~w}\n", [EndSeq])
-            ),
-            end_json_response(Resp);
-        (timeout, _) ->
-            send_chunk(Resp, "\n")
-        end
-    end,
-    ChangesArgs = parse_changes_query(Req, Db),
-    ChangesFun = couch_changes:handle_changes(ChangesArgs, Req, Db),
-    WrapperFun = case ChangesArgs#changes_args.feed of
-    "normal" ->
-        {ok, Info} = couch_db:get_db_info(Db),
-        CurrentEtag = couch_httpd:make_etag(Info),
-        fun(FeedChangesFun) ->
-            couch_httpd:etag_respond(
-                Req,
-                CurrentEtag,
-                fun() ->
-                    {ok, Resp} = couch_httpd:start_json_response(
-                         Req, 200, [{"ETag", CurrentEtag}]
-                    ),
-                    FeedChangesFun(MakeCallback(Resp))
-                end
-            )
-        end;
-    "eventsource" ->
-        Headers = [
-            {"Content-Type", "text/event-stream"},
-            {"Cache-Control", "no-cache"}
-        ],
-        {ok, Resp} = couch_httpd:start_chunked_response(Req, 200, Headers),
-        fun(FeedChangesFun) ->
-            FeedChangesFun(MakeCallback(Resp))
-        end;
-    _ ->
-        % "longpoll" or "continuous"
-        {ok, Resp} = couch_httpd:start_json_response(Req, 200),
-        fun(FeedChangesFun) ->
-            FeedChangesFun(MakeCallback(Resp))
-        end
-    end,
-    couch_stats_collector:increment(
-        {httpd, clients_requesting_changes}
-    ),
-    try
-        WrapperFun(ChangesFun)
-    after
-    couch_stats_collector:decrement(
-        {httpd, clients_requesting_changes}
-    )
     end.
 
 handle_compact_req(#httpd{method='POST'}=Req, Db) ->
@@ -1117,63 +1017,6 @@ parse_doc_query(Req) ->
             Args
         end
     end, #doc_query_args{}, couch_httpd:qs(Req)).
-
-parse_changes_query(Req, Db) ->
-    ChangesArgs = lists:foldl(fun({Key, Value}, Args) ->
-        case {string:to_lower(Key), Value} of
-        {"feed", _} ->
-            Args#changes_args{feed=Value};
-        {"descending", "true"} ->
-            Args#changes_args{dir=rev};
-        {"since", "now"} ->
-            UpdateSeq = couch_util:with_db(Db#db.name, fun(WDb) ->
-                                        couch_db:get_update_seq(WDb)
-                                end),
-            Args#changes_args{since=UpdateSeq};
-        {"since", _} ->
-            Args#changes_args{since=list_to_integer(Value)};
-        {"last-event-id", _} ->
-            Args#changes_args{since=list_to_integer(Value)};
-        {"limit", _} ->
-            Args#changes_args{limit=list_to_integer(Value)};
-        {"style", _} ->
-            Args#changes_args{style=list_to_existing_atom(Value)};
-        {"heartbeat", "true"} ->
-            Args#changes_args{heartbeat=true};
-        {"heartbeat", _} ->
-            Args#changes_args{heartbeat=list_to_integer(Value)};
-        {"timeout", _} ->
-            Args#changes_args{timeout=list_to_integer(Value)};
-        {"include_docs", "true"} ->
-            Args#changes_args{include_docs=true};
-        {"attachments", "true"} ->
-            Opts = Args#changes_args.doc_options,
-            Args#changes_args{doc_options=[attachments|Opts]};
-        {"att_encoding_info", "true"} ->
-            Opts = Args#changes_args.doc_options,
-            Args#changes_args{doc_options=[att_encoding_info|Opts]};
-        {"conflicts", "true"} ->
-            Args#changes_args{conflicts=true};
-        {"filter", _} ->
-            Args#changes_args{filter=Value};
-        _Else -> % unknown key value pair, ignore.
-            Args
-        end
-    end, #changes_args{}, couch_httpd:qs(Req)),
-    %% if it's an EventSource request with a Last-event-ID header
-    %% that should override the `since` query string, since it's
-    %% probably the browser reconnecting.
-    case ChangesArgs#changes_args.feed of
-        "eventsource" ->
-            case couch_httpd:header_value(Req, "last-event-id") of
-                undefined ->
-                    ChangesArgs;
-                Value ->
-                    ChangesArgs#changes_args{since=list_to_integer(Value)}
-            end;
-        _ ->
-            ChangesArgs
-    end.
 
 extract_header_rev(Req, ExplicitRev) when is_binary(ExplicitRev) or is_list(ExplicitRev)->
     extract_header_rev(Req, couch_doc:parse_rev(ExplicitRev));
